@@ -16,6 +16,15 @@ use serde::{de::DeserializeOwned, Serialize};
 /// [`InputSecret`](PvssScheme::InputSecret), the [`Transcript`](PvssScheme::Transcript) produced
 /// by [`deal`](PvssScheme::deal) and consumed by [`verify`](PvssScheme::verify), and the
 /// [`Share`](PvssScheme::Share) recovered by [`decrypt_share`](PvssScheme::decrypt_share).
+///
+/// Share decryption is split in two to keep expensive one-time preprocessing off the
+/// per-share critical path:
+///
+/// 1. [`decryptor`](PvssScheme::decryptor) — precompute any receiver-side state that
+///    depends only on the CRS (e.g. discrete-log tables). Call once per
+///    `PublicParameters`.
+/// 2. [`decrypt_share`](PvssScheme::decrypt_share) — reuse the precomputed state to
+///    recover one receiver's share.
 pub trait PvssScheme {
     /// Common reference string: curve points, receivers' encryption keys, threshold, etc.
     type PublicParameters;
@@ -32,6 +41,10 @@ pub trait PvssScheme {
     /// A receiver's decryption key.
     type DecryptionKey;
 
+    /// Precomputed receiver-side state. Potentially expensive to build but reused
+    /// across all share decryptions under the same `PublicParameters`.
+    type Decryptor;
+
     /// Produce a transcript that publicly commits to `secret` under `pp`.
     fn deal<R: RngCore + CryptoRng>(
         pp: &Self::PublicParameters,
@@ -42,8 +55,12 @@ pub trait PvssScheme {
     /// Check that `transcript` is a well-formed dealing under `pp`.
     fn verify(pp: &Self::PublicParameters, transcript: &Self::Transcript) -> bool;
 
+    /// Build the receiver-side precomputed state from the CRS. Call once.
+    fn decryptor(pp: &Self::PublicParameters) -> Self::Decryptor;
+
     /// Decrypt the share of the receiver at `index` using its `decryption_key`.
     fn decrypt_share(
+        decryptor: &Self::Decryptor,
         transcript: &Self::Transcript,
         decryption_key: &Self::DecryptionKey,
         index: usize,

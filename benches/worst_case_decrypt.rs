@@ -1,23 +1,24 @@
-//! Worst-case share-decryption benchmarks for Groth21.
+//! Worst-case and honest-case share-decryption benchmarks for Groth21.
 //!
-//! Per §DFINITY's-parameterization in <https://alinush.org/groth21>, decrypting a single
-//! *chunk* of a possibly-adversarial ciphertext may require solving up to `E - 1 = 255`
-//! discrete logs in a range of size `2Z - 1`, where `Z = 2·ℓ·n·m·(B-1)·(E-1)`
-//! (a ~42-bit number for `n = 256, m = 16`). Decrypting a full *share* involves
-//! `m = NUM_CHUNKS = 16` chunk decryptions, so the worst-case share-decryption cost is
-//! bounded by `16 · 255 · sqrt(2Z-1)` group additions (plus hash lookups).
+//! The BSGS baby-step table is always **precomputed outside** `b.iter()` — the
+//! [`Decryptor`] returned by `Groth21::decryptor` is built once per `(n, m)` and reused
+//! across every `decrypt_share` call. What we measure is the per-share decryption cost
+//! *after* setup, using the batch-optimal baby-table size.
 //!
-//! Our BSGS does a single-pass signed scan over `[-(Z-1), Z-1]` using a straddling baby
-//! table, so each chunk's BSGS solve in the worst case scans ~`sqrt(2Z-1)` giant steps
-//! using only group additions — no scalar multiplications. A random target w.h.p. has no
-//! dlog in range, forcing the solver to exhaust every δ ∈ [1, E-1] and walk the full
-//! `max_j` iterations on both symmetric cursors — matching the true worst case.
+//! Two benches:
 //!
-//! This file benches only the inner-loop worst-case BSGS solve (`solve_signed` on a
-//! random target). The full share-decryption worst case is roughly `NUM_CHUNKS · (E-1)
-//! = 16 · 255 = 4080×` this number — far too slow to run directly under Criterion even
-//! for small `n` (hours per sample), so we measure the building block and leave the
-//! multiplication to the reader.
+//!   - `share-decrypt-honest/<n>`: run `Groth21::decrypt_share` on a real (honest)
+//!     transcript. Each chunk's dlog is in `[0, B)` and hits the baby table directly,
+//!     so this just costs `m` point subtractions + hash lookups.
+//!   - `share-decrypt-worst/<n>`: feed the decryptor a synthetic ciphertext whose
+//!     per-chunk targets are random G1 points. W.h.p. none have a dlog in
+//!     `[-(Z-1), Z-1]`, so the solver exhausts every `δ ∈ [1, E-1]` for every chunk —
+//!     i.e. the full `m · (E-1)` BSGS-query worst case. Because the baby-step table is
+//!     sized for exactly this batch, total work is `O(√(m·(E-1)·Z))` not the naive
+//!     `m·(E-1)·√Z`.
+//!
+//! Prints the BSGS sizing (`table_size`, `max_giant_steps`) on stderr for each `n` so
+//! you can sanity-check timing against the theoretical model.
 
 use std::ops::Mul;
 
@@ -27,7 +28,10 @@ use ff::Field;
 use group::Group;
 use rand::thread_rng;
 
-use e2e_vss::groth21::{BabyStepGiantStep, NUM_CHUNKS};
+use e2e_vss::groth21::{
+    random_encryption_keys, Decryptor, Groth21, PublicParameters, Transcript, NUM_CHUNKS,
+};
+use e2e_vss::pvss::{InputSecret, PvssScheme, SharingConfiguration};
 
 fn random_g1() -> G1Projective {
     let mut rng = thread_rng();
@@ -35,35 +39,63 @@ fn random_g1() -> G1Projective {
     G1Projective::generator().mul(s)
 }
 
-/// `max_abs` passed to `BabyStepGiantStep::new`, matching what
-/// `CheatingDealerDlogSolver::new(n, NUM_CHUNKS)` configures internally.
-/// Kept in sync with `groth21::nizk_chunking::{CHALLENGE_BITS, NUM_ZK_REPETITIONS}`
-/// and `groth21::chunking::CHUNK_SIZE`.
-fn cheater_bsgs_max_abs(n: usize, m: usize) -> u64 {
-    const CHALLENGE_BITS: usize = 8;
-    const NUM_ZK_REPETITIONS: usize = 32;
-    const CHUNK_SIZE: usize = 1 << 16;
-    let scale_range: u64 = 1 << CHALLENGE_BITS;
-    let ss = (n as u64) * (m as u64) * ((CHUNK_SIZE - 1) as u64) * (scale_range - 1);
-    let zz = 2 * (NUM_ZK_REPETITIONS as u64) * ss;
-    zz - 1
+fn print_decryptor_params(n: usize, d: &Decryptor) {
+    eprintln!(
+        "  n={:<3}  bsgs.table_size = {:>12}  bsgs.max_giant_steps = {:>8}",
+        n,
+        d.bsgs_table_size(),
+        d.bsgs_max_giant_steps()
+    );
 }
 
-/// One worst-case BSGS `solve` (full signed scan). Multiply by `NUM_CHUNKS * (E-1) = 4080`
-/// to get a rough upper bound on the full share-decryption worst case.
-fn bench_bsgs_worst_case(c: &mut Criterion) {
-    let mut g = c.benchmark_group("groth21-worst-case");
+fn setup(n: usize) -> (SharingConfiguration, PublicParameters, Scalar, Transcript, Decryptor) {
+    let mut rng = thread_rng();
+    let t = (2 * n) / 3;
+    let sc = SharingConfiguration::new(t + 1, n);
+    let (dks, eks) = random_encryption_keys(n, &mut rng);
+    let pp = PublicParameters::new(sc.clone(), eks, b"groth21-bench", b"e2e-vss");
+    let secret = InputSecret::new_random(&sc, false, &mut rng);
+    let transcript = Groth21::deal(&pp, &secret, &mut rng);
+    assert!(Groth21::verify(&pp, &transcript));
+    let decryptor = Groth21::decryptor(&pp);
+    print_decryptor_params(n, &decryptor);
+    (sc, pp, dks[0], transcript, decryptor)
+}
+
+fn bench_share_decrypt_honest(c: &mut Criterion) {
+    let mut g = c.benchmark_group("groth21-decrypt");
     g.sample_size(10);
 
     for &n in &[8usize, 16, 32, 64, 128, 256] {
-        let max_abs = cheater_bsgs_max_abs(n, NUM_CHUNKS);
-        let bsgs = BabyStepGiantStep::new(max_abs);
-        let tgt = random_g1(); // w.h.p. has no dlog in [-max_abs, max_abs]
+        let (_sc, _pp, dk, transcript, decryptor) = setup(n);
+        g.throughput(Throughput::Elements(1));
+        g.bench_function(BenchmarkId::new("share-decrypt-honest", n), |b| {
+            b.iter(|| {
+                let _ = Groth21::decrypt_share(&decryptor, &transcript, &dk, 0);
+            })
+        });
+    }
+    g.finish();
+}
+
+fn bench_share_decrypt_worst(c: &mut Criterion) {
+    let mut g = c.benchmark_group("groth21-decrypt");
+    g.sample_size(10);
+
+    for &n in &[8usize, 16, 32, 64, 128, 256] {
+        let (_sc, _pp, _dk, _transcript, decryptor) = setup(n);
+        // NUM_CHUNKS random G1 targets — w.h.p. each forces the solver to walk every
+        // δ ∈ [1, E-1] and the full `max_giant_steps × 2` cursor iterations before
+        // returning `None`. Exactly the per-share worst case.
+        let targets: Vec<G1Projective> = (0..NUM_CHUNKS).map(|_| random_g1()).collect();
+        let solver = decryptor.solver_for_bench();
 
         g.throughput(Throughput::Elements(1));
-        g.bench_function(BenchmarkId::new("bsgs-solve", n), |b| {
+        g.bench_function(BenchmarkId::new("share-decrypt-worst", n), |b| {
             b.iter(|| {
-                let _ = bsgs.solve(&tgt);
+                for tgt in &targets {
+                    let _ = solver.solve(tgt);
+                }
             })
         });
     }
@@ -71,8 +103,8 @@ fn bench_bsgs_worst_case(c: &mut Criterion) {
 }
 
 criterion_group!(
-    name = worst_case;
+    name = decrypt_benches;
     config = Criterion::default();
-    targets = bench_bsgs_worst_case
+    targets = bench_share_decrypt_honest, bench_share_decrypt_worst
 );
-criterion_main!(worst_case);
+criterion_main!(decrypt_benches);

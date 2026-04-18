@@ -15,6 +15,7 @@ mod nizk_sharing;
 mod utils;
 
 use std::ops::Mul;
+use std::sync::Arc;
 
 use blstrs::{G1Projective, G2Projective, Scalar};
 use ff::Field;
@@ -29,7 +30,7 @@ use crate::pvss::{InputSecret, PvssScheme, Share, SharingConfiguration};
 pub use chunking::NUM_CHUNKS;
 pub use dealing::{create_dealing, verify_dealing};
 pub use dlog_recovery::{BabyStepGiantStep, CheatingDealerDlogSolver};
-pub use encryption::{CiphertextChunks, dec_chunks};
+pub use encryption::{decrypt_chunks_with, CiphertextChunks};
 pub use nizk_chunking::ProofChunking;
 pub use nizk_sharing::ProofSharing;
 
@@ -96,12 +97,40 @@ pub struct Transcript {
 /// Marker type implementing [`PvssScheme`] for Groth21.
 pub struct Groth21;
 
+/// Receiver-side state precomputed once from a [`PublicParameters`]. Holds a BSGS table
+/// sized for a full share's worth of worst-case DLs (`m · (E-1)` queries), so
+/// [`Groth21::decrypt_share`] never does any table building on the hot path.
+#[derive(Clone)]
+pub struct Decryptor {
+    solver: Arc<CheatingDealerDlogSolver>,
+}
+
+impl Decryptor {
+    /// Build a decryptor sized for `n_players` receivers. Expensive; call once.
+    pub fn new(n_players: usize) -> Self {
+        Self { solver: Arc::new(CheatingDealerDlogSolver::new(n_players, NUM_CHUNKS)) }
+    }
+
+    /// Number of entries in the BSGS baby-step table.
+    pub fn bsgs_table_size(&self) -> u64 { self.solver.bsgs().table_size() }
+
+    /// Upper bound on giant steps per BSGS `solve` call.
+    pub fn bsgs_max_giant_steps(&self) -> u64 { self.solver.bsgs().max_giant_steps() }
+
+    pub(crate) fn solver(&self) -> &CheatingDealerDlogSolver { &self.solver }
+
+    /// Exposes the underlying solver. Only intended for benches that want to measure
+    /// the BSGS layer directly.
+    pub fn solver_for_bench(&self) -> &CheatingDealerDlogSolver { &self.solver }
+}
+
 impl PvssScheme for Groth21 {
     type PublicParameters = PublicParameters;
     type InputSecret = InputSecret;
     type Transcript = Transcript;
     type Share = Share;
     type DecryptionKey = Scalar;
+    type Decryptor = Decryptor;
 
     fn deal<R: RngCore + CryptoRng>(pp: &PublicParameters, secret: &InputSecret, rng: &mut R) -> Transcript {
         let sc = &pp.sharing_config;
@@ -153,8 +182,12 @@ impl PvssScheme for Groth21 {
         )
     }
 
-    fn decrypt_share(transcript: &Transcript, dk: &Scalar, index: usize) -> Share {
-        let secret = dec_chunks(&transcript.ciphertext, *dk, index);
+    fn decryptor(pp: &PublicParameters) -> Decryptor {
+        Decryptor::new(pp.n())
+    }
+
+    fn decrypt_share(decryptor: &Decryptor, transcript: &Transcript, dk: &Scalar, index: usize) -> Share {
+        let secret = decrypt_chunks_with(decryptor.solver(), &transcript.ciphertext, *dk, index);
         Share::new(secret, Scalar::ZERO)
     }
 }

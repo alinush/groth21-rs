@@ -25,11 +25,13 @@ fn deal_verify_decrypt_reconstruct() {
 
     assert!(Groth21::verify(&pp, &transcript));
 
-    // Each receiver's share should match the committed evaluation.
+    // Precompute the BSGS table once, reuse across all receivers.
+    let decryptor = Groth21::decryptor(&pp);
+
     let g1_bases = pp.g1_bases();
     let mut all_shares = Vec::with_capacity(n);
     for i in 0..n {
-        let share = Groth21::decrypt_share(&transcript, &dks[i], i);
+        let share = Groth21::decrypt_share(&decryptor, &transcript, &dks[i], i);
         let com: G1Projective = transcript.coms_g1[i];
         let e_com = G1Projective::multi_exp(g1_bases, share.as_scalars());
         assert!(com.eq(&e_com), "share {i} doesn't match commitment");

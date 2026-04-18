@@ -358,6 +358,7 @@ name = "e2e-vss"
 version = "0.2.0"
 dependencies = [
  "bincode",
+ "blst",
  "blstrs",
  "criterion",
  "ff",

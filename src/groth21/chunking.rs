@@ -3,8 +3,12 @@ use zeroize::Zeroize;
 
 use crate::math::scalar::SCALAR_NUM_BYTES;
 
-/// The size of a chunk in bytes.
+/// The size of a chunk in bytes. Controlled by the `chunks-8bit` feature.
+#[cfg(not(feature = "chunks-8bit"))]
 pub const CHUNK_BYTES: usize = 2;
+#[cfg(feature = "chunks-8bit")]
+pub const CHUNK_BYTES: usize = 1;
+
 pub const CHUNK_BITS: usize = CHUNK_BYTES * 8;
 /// Cardinality of the chunk range.
 pub const CHUNK_SIZE: usize = 1 << CHUNK_BITS;
@@ -24,9 +28,13 @@ impl PlaintextChunks {
         let bytes = s.to_bytes_be();
         let mut chunks = [0; NUM_CHUNKS];
         for i in 0..NUM_CHUNKS {
-            let mut buffer = [0u8; CHUNK_BYTES];
-            buffer.copy_from_slice(&bytes[CHUNK_BYTES * i..CHUNK_BYTES * (i + 1)]);
-            chunks[i] = u16::from_be_bytes(buffer) as isize;
+            let slice = &bytes[CHUNK_BYTES * i..CHUNK_BYTES * (i + 1)];
+            // Big-endian decode of CHUNK_BYTES bytes into an unsigned integer.
+            let mut v: u64 = 0;
+            for &b in slice {
+                v = (v << 8) | b as u64;
+            }
+            chunks[i] = v as isize;
         }
         chunks.reverse();
         Self { chunks }

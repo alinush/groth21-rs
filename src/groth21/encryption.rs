@@ -65,14 +65,18 @@ pub fn enc_chunks<R: RngCore + CryptoRng>(
     (CiphertextChunks::new(rr, cc), EncryptionWitness { r_0, scalars_r: r })
 }
 
-pub fn dec_chunks(ctxt: &CiphertextChunks, secret: Scalar, index: usize) -> Scalar {
-    let n = ctxt.cc.len();
-    let m = ctxt.cc[index].len();
-
+/// Decrypt one receiver's chunks using a **precomputed** BSGS solver. Does no table
+/// setup — purely BSGS `solve` calls plus point arithmetic. Callers should hold one
+/// `CheatingDealerDlogSolver` for the deployment and reuse it across every share.
+pub fn decrypt_chunks_with(
+    solver: &CheatingDealerDlogSolver,
+    ctxt: &CiphertextChunks,
+    secret: Scalar,
+    index: usize,
+) -> Scalar {
     let cj = &ctxt.cc[index];
     let powers: Vec<G1Projective> = cj.iter().zip(ctxt.rr.iter()).map(|(cc, rr)| cc - rr.mul(secret)).collect();
 
-    let solver = CheatingDealerDlogSolver::new(n, m);
     let mut dlogs: Vec<Scalar> = powers.iter().map(|p| solver.solve(p).expect("dlog in range")).collect();
 
     dlogs.reverse();
