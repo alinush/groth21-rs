@@ -48,7 +48,7 @@ fn print_decryptor_params(n: usize, d: &Decryptor) {
     );
 }
 
-fn setup(n: usize) -> (SharingConfiguration, PublicParameters, Scalar, Transcript, Decryptor) {
+fn setup(n: usize, decryptor: Decryptor) -> (SharingConfiguration, PublicParameters, Scalar, Transcript, Decryptor) {
     let mut rng = thread_rng();
     let t = (2 * n) / 3;
     let sc = SharingConfiguration::new(t + 1, n);
@@ -57,7 +57,6 @@ fn setup(n: usize) -> (SharingConfiguration, PublicParameters, Scalar, Transcrip
     let secret = InputSecret::new_random(&sc, false, &mut rng);
     let transcript = Groth21::deal(&pp, &secret, &mut rng);
     assert!(Groth21::verify(&pp, &transcript));
-    let decryptor = Groth21::decryptor(&pp);
     print_decryptor_params(n, &decryptor);
     (sc, pp, dks[0], transcript, decryptor)
 }
@@ -66,8 +65,11 @@ fn bench_share_decrypt_honest(c: &mut Criterion) {
     let mut g = c.benchmark_group("groth21-decrypt");
     g.sample_size(10);
 
-    for &n in &[8usize, 16, 32, 64, 128, 256] {
-        let (_sc, _pp, dk, transcript, decryptor) = setup(n);
+    // Best-case decryption: BSGS must cover [-(Z-1), Z-1] (soundness bound),
+    // but batched only for k = m queries per share (no δ iteration).
+    for &n in &[4usize, 8, 16, 32, 64, 128, 256, 512, 1024] {
+        let decryptor = Decryptor::new_best_case(n);
+        let (_sc, _pp, dk, transcript, decryptor) = setup(n, decryptor);
         g.throughput(Throughput::Elements(1));
         g.bench_function(BenchmarkId::new("share-decrypt-honest", n), |b| {
             b.iter(|| {
@@ -82,8 +84,10 @@ fn bench_share_decrypt_worst(c: &mut Criterion) {
     let mut g = c.benchmark_group("groth21-decrypt");
     g.sample_size(10);
 
-    for &n in &[8usize, 16, 32, 64, 128, 256] {
-        let (_sc, _pp, _dk, _transcript, decryptor) = setup(n);
+    for &n in &[4usize, 8, 16, 32, 64, 128, 256, 512, 1024] {
+        // Worst case needs the full batched table (sized for k = m·(E-1) queries).
+        let decryptor = Decryptor::new(n);
+        let (_sc, _pp, _dk, _transcript, decryptor) = setup(n, decryptor);
         // NUM_CHUNKS random G1 targets — w.h.p. each forces the solver to walk every
         // δ ∈ [1, E-1] and the full `max_giant_steps × 2` cursor iterations before
         // returning `None`. Exactly the per-share worst case.

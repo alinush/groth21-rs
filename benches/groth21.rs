@@ -48,8 +48,8 @@ fn bench_verify<M: Measurement>(t: usize, n: usize, g: &mut BenchmarkGroup<M>) {
 
 fn groth21_benches(c: &mut Criterion) {
     let mut group = c.benchmark_group("groth21");
-    let ns = [8, 16, 32, 64, 128, 256];
-    let ts = [6, 11, 22, 43, 85, 169];
+    let ns = [4, 8, 16, 32, 64, 128, 256, 512, 1024];
+    let ts = [3, 6, 11, 22, 43, 86,  171, 342, 683];
     for (&t, &n) in ts.iter().zip(ns.iter()) {
         bench_deal(t, n, &mut group);
         bench_verify(t, n, &mut group);

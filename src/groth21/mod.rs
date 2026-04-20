@@ -111,6 +111,15 @@ impl Decryptor {
         Self { solver: Arc::new(CheatingDealerDlogSolver::new(n_players, NUM_CHUNKS)) }
     }
 
+    /// Build a decryptor sized for best-case (δ = 1) share decryption. The
+    /// BSGS table covers the full signed soundness range `[-(Z-1), Z-1]` (as
+    /// it must — the receiver can't distinguish honest from approximate-range
+    /// cheating chunks) but is batched for only `k = m` queries per share
+    /// rather than the `m·(E-1)` worst-case batch.
+    pub fn new_best_case(n_players: usize) -> Self {
+        Self { solver: Arc::new(CheatingDealerDlogSolver::new_best_case(n_players)) }
+    }
+
     /// Number of entries in the BSGS baby-step table.
     pub fn bsgs_table_size(&self) -> u64 { self.solver.bsgs().table_size() }
 

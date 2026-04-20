@@ -16,8 +16,8 @@ use e2e_vss::pvss::{InputSecret, PvssScheme, SharingConfiguration};
 fn transcript_sizes() {
     let mut rng = thread_rng();
 
-    let ns = [8, 16, 32, 64, 128, 256];
-    let ts = [6, 11, 22, 43, 85, 169];
+    let ns = [4, 8, 16, 32, 64, 128, 256, 512, 1024];
+    let ts = [3, 6, 11, 22, 43, 86,  171, 342, 683];
 
     println!("\n{:<6} {:<6} {:<15} {:<15}", "n", "t", "size (bytes)", "size (KiB)");
     println!("{}", "-".repeat(45));

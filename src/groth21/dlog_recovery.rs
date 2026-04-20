@@ -22,7 +22,7 @@ use group::Group;
 
 use crate::math::scalar::G1_PROJ_NUM_BYTES;
 
-use super::chunking::CHUNK_SIZE;
+use super::chunking::{CHUNK_SIZE, NUM_CHUNKS};
 use super::nizk_chunking::{CHALLENGE_BITS, NUM_ZK_REPETITIONS};
 
 /// Pick `m` for a BSGS targeting a batch of `batch_size` solves. Returns an odd value.
@@ -162,6 +162,25 @@ impl CheatingDealerDlogSolver {
         let ss = (n as u64) * (m as u64) * ((CHUNK_SIZE - 1) as u64) * (scale_range - 1);
         let zz = 2 * (NUM_ZK_REPETITIONS as u64) * ss;
         Self { bsgs: BabyStepGiantStep::new(zz - 1), scale_range }
+    }
+
+    /// Build a batched BSGS table sized for **best-case** (δ = 1) decryption
+    /// of a whole share: the table covers the full signed soundness range
+    /// `[-(Z-1), Z-1]` — because the receiver can't distinguish honest chunks
+    /// from approximately-small cheating chunks — but is batched for only
+    /// `k = m = NUM_CHUNKS` queries per share (one per chunk, no δ iteration).
+    /// Table size `≈ √(m·(2Z-1))`, much smaller than the full
+    /// `m·(E-1)`-batched table used by cheater decryption.
+    pub fn new_best_case(n_players: usize) -> Self {
+        let scale_range: u64 = 1 << CHALLENGE_BITS;
+        let n = n_players as u64;
+        let m = NUM_CHUNKS as u64;
+        let ss = n * m * ((CHUNK_SIZE - 1) as u64) * (scale_range - 1);
+        let zz = 2 * (NUM_ZK_REPETITIONS as u64) * ss;
+        Self {
+            bsgs: BabyStepGiantStep::new_batched(zz - 1, m),
+            scale_range,
+        }
     }
 
     pub fn bsgs(&self) -> &BabyStepGiantStep { &self.bsgs }
