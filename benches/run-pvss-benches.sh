@@ -34,14 +34,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# macOS ships bash 3.2, which treats "${arr[@]}" on an empty array as unbound
+# under `set -u`. The `${arr[@]+…}` guard only expands when the array is set.
 echo "== Running Criterion benchmarks: deal + verify =="
-cargo bench "${FEATURE_ARGS[@]}" --bench groth21 "${BENCH_ONLY_ARGS[@]}"
-
-echo
-echo "== Running Criterion benchmarks: worst-case BSGS =="
-echo "(full share worst case ≈ NUM_CHUNKS · (E-1) × one bsgs-solve)"
-cargo bench "${FEATURE_ARGS[@]}" --bench worst_case_decrypt "${BENCH_ONLY_ARGS[@]}"
+cargo bench ${FEATURE_ARGS[@]+"${FEATURE_ARGS[@]}"} --bench groth21 ${BENCH_ONLY_ARGS[@]+"${BENCH_ONLY_ARGS[@]}"}
 
 echo
 echo "== Transcript sizes =="
-cargo test --release "${FEATURE_ARGS[@]}" --test transcript_sizes -- --ignored --nocapture transcript_sizes
+cargo test --release ${FEATURE_ARGS[@]+"${FEATURE_ARGS[@]}"} --test transcript_sizes -- --ignored --nocapture transcript_sizes

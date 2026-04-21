@@ -35,14 +35,17 @@ blst's internal Pippenger MSM thread pool is compiled out. Prepend
 RAYON_NUM_THREADS=1 cargo bench --features chunks-8bit --bench groth21
 ```
 
-**One-shot reproduction** of all four columns:
+**One-shot reproduction** of three of the four columns:
 
 ```bash
 RAYON_NUM_THREADS=1 ./benches/run-pvss-benches.sh --features chunks-8bit
 ```
 
-This runs `groth21` (deal + verify), `worst_case_decrypt` (honest + worst),
-and the `transcript_sizes` test, in that order.
+This runs `groth21` (deal + verify) and the `transcript_sizes` test, in that
+order. The **Decrypt share (ms)** column needs a separate manual invocation
+(`cargo bench --bench worst_case_decrypt -- 'share-decrypt-honest'`) — it's
+not in the one-shot script because the `worst_case_decrypt` bench's worst-case
+half is minutes-per-`n` at `n ≥ 128` and isn't reported in the blog table.
 
 ## (t, n) pairs benched
 
@@ -126,9 +129,10 @@ total ns) if you want to bootstrap confidence intervals yourself.
 - The worst-case decrypt bench at `n ≥ 128` takes minutes per `n` because each
   sample is a full `m · (E-1)` BSGS scan over random targets. The honest bench
   is flat ~1.5 ms regardless of `n`.
-- Criterion warmups take ~3 s per bench; the wall clock for
-  `run-pvss-benches.sh --features chunks-8bit` is ~45 min when `worst-case` is
-  included for `n ≤ 256` (and grows quickly past that).
+- Criterion warmups take ~3 s per bench; `run-pvss-benches.sh --features
+  chunks-8bit` (deal + verify + transcript sizes only) takes a few minutes.
+  Running `worst_case_decrypt` separately adds ~45 min for `n ≤ 256` and grows
+  quickly past that.
 - `blstrs` (via `blst`) is currently compiled without threads (see `Cargo.toml`
   `blst = { ..., features = ["no-threads"] }`). If you ever remove that, every
   `multi_exp` call will silently start using `num_cpus::get_physical()` threads
