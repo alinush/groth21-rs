@@ -4,6 +4,7 @@
 use std::ops::{Mul, Neg};
 
 use blstrs::{G1Projective, Scalar};
+use ff::Field;
 use group::Group;
 use rand::distributions::{Distribution, Uniform};
 use rand_chacha::rand_core::{RngCore as CRngCore, SeedableRng};
@@ -143,6 +144,106 @@ pub fn prove_chunking<R: RngCore + CryptoRng>(
             break (first_move, first_challenge, z_s);
         }
     };
+
+    let delta = random_scalars(n + 1, rng);
+    let dd: Vec<G1Projective> = delta.iter().map(|d| g1.mul(d)).collect();
+
+    let yy = {
+        let y0_and_pk: Vec<_> = std::iter::once(y0).chain(public_keys.iter().copied()).collect();
+        G1Projective::multi_exp(&y0_and_pk, &delta)
+    };
+
+    let second_move = SecondMoveChunking::from(&z_s, &dd, &yy);
+    let second_challenge = second_challenge(&first_challenge, &second_move);
+    let xpowers = get_xpowers(&second_challenge, NUM_ZK_REPETITIONS);
+
+    let mut z_r = Vec::with_capacity(first_challenge.len());
+    let mut delta_idx = 1;
+    for e_i in first_challenge.iter() {
+        let mut xpow_e_ij = Vec::with_capacity(e_i.len());
+        for j in 0..e_i.len() {
+            xpow_e_ij.push(scalar_usize_mult_exp(&xpowers, &e_i[j]));
+        }
+        let z_rk = scalar_mult_exp(&witness.scalars_r, &xpow_e_ij) + &delta[delta_idx];
+        z_r.push(z_rk);
+        delta_idx += 1;
+    }
+
+    let z_beta = scalar_mult_exp(&beta, &xpowers) + &delta[0];
+
+    ProofChunking {
+        y0,
+        bb,
+        cc: first_move.cc,
+        dd,
+        yy,
+        z_r,
+        z_s,
+        z_beta,
+    }
+}
+
+/// Malicious variant of [`prove_chunking`] that sets all blinders $\sigma_k = 0$.
+///
+/// The verifier has no way to check how $\sigma_k$ was sampled (it's hidden inside
+/// $C_k = \beta_k\cdot y_0 + \sigma_k\cdot G_1$), so a malicious prover can pick
+/// $\sigma_k = 0$ to bypass rejection sampling entirely. This is one-shot and
+/// deterministic — no retry loop is needed when the witness satisfies
+/// $\sum_{(i,j)} e_{i,j,k} \cdot s_{i,j} \in [0, Z-1]$.
+///
+/// Zero-knowledge is **destroyed** (the response leaks the subset-sum of chunks),
+/// but soundness of [`verify_chunking`] is unaffected — this function just realizes
+/// the upper bound any PPT cheating prover can achieve.
+pub fn prove_chunking_zero_sigma<R: RngCore + CryptoRng>(
+    public_keys: &[G1Projective],
+    ciphertexts: &CiphertextChunks,
+    witness: &ChunkingWitness,
+    rng: &mut R,
+) -> ProofChunking {
+    let m = ciphertexts.rr.len();
+    let n = public_keys.len();
+
+    let ss = n * m * (CHUNK_SIZE - 1) * CHALLENGE_MASK;
+    let zz = 2 * NUM_ZK_REPETITIONS * ss;
+    let zz_big = Scalar::from(zz as u64);
+
+    let mut seed = [0u8; 32];
+    rng.fill_bytes(&mut seed);
+    let y0 = G1Projective::hash_to_curve(&seed, b"nizk-chunking-proof-y0", b"G1");
+
+    let g1 = G1Projective::generator();
+    let y0_g1_tbl = [y0, g1];
+
+    let beta = random_scalars(NUM_ZK_REPETITIONS, rng);
+    let bb: Vec<G1Projective> = beta.iter().map(|x| g1.mul(x)).collect();
+
+    // Malicious choice: sigma_k = 0 for all k.
+    let sigma = [Scalar::ZERO; NUM_ZK_REPETITIONS];
+
+    let cc: Vec<G1Projective> = (0..NUM_ZK_REPETITIONS)
+        .map(|i| G1Projective::multi_exp(&y0_g1_tbl, &[beta[i], sigma[i]]))
+        .collect();
+
+    let first_move = FirstMoveChunking::new(y0, bb.clone(), cc);
+    let first_challenge = ChunksOracle::new(public_keys, ciphertexts, &first_move).get_all_chunks(n, m);
+
+    let iota: [usize; NUM_ZK_REPETITIONS] = std::array::from_fn(|i| i);
+    let z_s = iota.map(|k| {
+        let mut acc = Scalar::from(0);
+        first_challenge.iter().zip(witness.scalars_s.iter()).for_each(|(e_i, s_i)| {
+            e_i.iter().zip(s_i.iter()).for_each(|(e_ij, s_ij)| {
+                acc += Scalar::from(e_ij[k] as u64) * s_ij;
+            });
+        });
+        // sigma[k] == 0, so no additive term.
+        acc
+    });
+
+    // With c <= (Z-1-S)/(E-1), every z_s[k] lives in [0, Z-1] deterministically.
+    // If this fires, the caller passed a chunk that's too big.
+    let zs_in_range = z_s.iter().map(|z| zz_big.gt(z) as isize).sum::<isize>() as usize
+        == NUM_ZK_REPETITIONS;
+    assert!(zs_in_range, "malicious chunking out of range: z_s not in [0, Z-1]");
 
     let delta = random_scalars(n + 1, rng);
     let dd: Vec<G1Projective> = delta.iter().map(|d| g1.mul(d)).collect();

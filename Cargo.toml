@@ -29,6 +29,9 @@ more-asserts = "0.3"
 default = []
 # Use 8-bit chunks (ℓ=8, B=2^8, m=32) instead of the default 16-bit chunks (ℓ=16, B=2^16, m=16).
 chunks-8bit = []
+# Use 32-bit chunks (ℓ=32, B=2^32, m=8). Decryption via BSGS is impractical at this
+# size; this feature exists only for Deal/Verify/transcript-size measurements.
+chunks-32bit = []
 
 [dev-dependencies]
 criterion = "0.5"

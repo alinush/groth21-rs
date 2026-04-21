@@ -3,11 +3,13 @@ use zeroize::Zeroize;
 
 use crate::math::scalar::SCALAR_NUM_BYTES;
 
-/// The size of a chunk in bytes. Controlled by the `chunks-8bit` feature.
-#[cfg(not(feature = "chunks-8bit"))]
+/// The size of a chunk in bytes. Controlled by the `chunks-8bit` / `chunks-32bit` features.
+#[cfg(not(any(feature = "chunks-8bit", feature = "chunks-32bit")))]
 pub const CHUNK_BYTES: usize = 2;
 #[cfg(feature = "chunks-8bit")]
 pub const CHUNK_BYTES: usize = 1;
+#[cfg(feature = "chunks-32bit")]
+pub const CHUNK_BYTES: usize = 4;
 
 pub const CHUNK_BITS: usize = CHUNK_BYTES * 8;
 /// Cardinality of the chunk range.

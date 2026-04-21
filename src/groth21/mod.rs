@@ -10,6 +10,7 @@ pub mod dlog_recovery;
 mod encryption;
 mod fiat_shamir;
 mod fs_util;
+pub mod malicious;
 mod nizk_chunking;
 mod nizk_sharing;
 mod utils;
